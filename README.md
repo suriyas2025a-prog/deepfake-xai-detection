@@ -1,5 +1,3 @@
-Absolutely. Here is a **ready-to-paste `README.md`** for your GitHub repository.
-
 ````markdown
 # AI Deepfake Image Detection Using Explainable AI
 
