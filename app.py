@@ -25,10 +25,19 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
 
-    return tf.keras.models.load_model(
+    loaded_model = tf.keras.models.load_model(
         "deepfake_xai_model.keras"
     )
 
+    # Build the model explicitly
+    dummy_input = tf.zeros(
+        (1, 299, 299, 3),
+        dtype=tf.float32
+    )
+
+    loaded_model(dummy_input)
+
+    return loaded_model
 
 model = load_model()
 
@@ -135,49 +144,87 @@ def make_gradcam_heatmap(
     last_conv_layer_name="block14_sepconv2_act"
 ):
 
-    # Find the final convolutional layer
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Call the loaded Sequential model once.
+    # This builds its input/output tensors in Keras 3.
+    # --------------------------------------------------------
+
+    _ = model(image_array, training=False)
+
+    # Get Xception base model
+    base_model = model.layers[0]
+
+    # Get final convolutional layer
     last_conv_layer = base_model.get_layer(
         last_conv_layer_name
     )
 
-    # Create model that returns:
-    # 1. convolutional feature maps
-    # 2. final prediction
+    # --------------------------------------------------------
+    # Create Grad-CAM model
+    # --------------------------------------------------------
+
     grad_model = tf.keras.models.Model(
-        inputs=model.inputs,
+        inputs=base_model.input,
         outputs=[
             last_conv_layer.output,
-            model.output
+            base_model.output
         ]
     )
 
+    # --------------------------------------------------------
+    # Forward pass
+    # --------------------------------------------------------
+
     with tf.GradientTape() as tape:
 
-        conv_outputs, predictions = grad_model(
-            image_array
+        conv_outputs, base_output = grad_model(
+            image_array,
+            training=False
         )
 
-        # For Fake:
+        # Pass Xception output through the remaining
+        # layers of the Sequential model
+        x = base_output
+
+        for layer in model.layers[1:]:
+
+            x = layer(
+                x,
+                training=False
+            )
+
+        final_prediction = x[:, 0]
+
+        # ----------------------------------------------------
+        # For FAKE:
         # fake probability = 1 - real probability
         #
-        # For Real:
-        # real probability = real probability
+        # For REAL:
+        # real probability = prediction
+        # ----------------------------------------------------
 
         if prediction < 0.5:
 
-            class_output = 1 - predictions[:, 0]
+            class_output = 1.0 - final_prediction
 
         else:
 
-            class_output = predictions[:, 0]
+            class_output = final_prediction
 
+    # --------------------------------------------------------
     # Calculate gradients
+    # --------------------------------------------------------
+
     grads = tape.gradient(
         class_output,
         conv_outputs
     )
 
-    # Average gradients over spatial dimensions
+    # --------------------------------------------------------
+    # Average gradients
+    # --------------------------------------------------------
+
     pooled_grads = tf.reduce_mean(
         grads,
         axis=(0, 1, 2)
@@ -185,7 +232,10 @@ def make_gradcam_heatmap(
 
     conv_outputs = conv_outputs[0]
 
-    # Weight feature maps
+    # --------------------------------------------------------
+    # Weighted feature maps
+    # --------------------------------------------------------
+
     heatmap = tf.reduce_sum(
         conv_outputs * pooled_grads,
         axis=-1
@@ -204,7 +254,6 @@ def make_gradcam_heatmap(
 
     return heatmap.numpy()
 
-
 # ============================================================
 # CREATE GRAD-CAM IMAGE
 # ============================================================
@@ -214,7 +263,10 @@ def create_gradcam(
     prediction
 ):
 
-    # Resize
+    # --------------------------------------------------------
+    # Resize image
+    # --------------------------------------------------------
+
     resized_image = image.resize(
         (299, 299)
     )
@@ -225,7 +277,10 @@ def create_gradcam(
         np.uint8
     )
 
-    # Preprocess
+    # --------------------------------------------------------
+    # Convert image to array
+    # --------------------------------------------------------
+
     image_array = img_to_array(
         resized_image
     )
@@ -235,40 +290,59 @@ def create_gradcam(
         axis=0
     )
 
-    image_array = tf.keras.applications.xception.preprocess_input(
-        image_array
+    # Xception preprocessing
+    image_array = (
+        tf.keras.applications.xception
+        .preprocess_input(
+            image_array
+        )
     )
 
-    # Generate heatmap
+    # --------------------------------------------------------
+    # Generate Grad-CAM
+    # --------------------------------------------------------
+
     heatmap = make_gradcam_heatmap(
         image_array,
-        prediction
+        prediction,
+        last_conv_layer_name="block14_sepconv2_act"
     )
 
+    # --------------------------------------------------------
     # Resize heatmap
+    # --------------------------------------------------------
+
     heatmap = cv2.resize(
         heatmap,
         (299, 299)
     )
 
+    # --------------------------------------------------------
     # Convert to 0-255
+    # --------------------------------------------------------
+
     heatmap_uint8 = np.uint8(
         255 * heatmap
     )
 
+    # --------------------------------------------------------
     # Apply color map
+    # --------------------------------------------------------
+
     heatmap_color = cv2.applyColorMap(
         heatmap_uint8,
         cv2.COLORMAP_JET
     )
 
-    # Convert BGR to RGB
     heatmap_color = cv2.cvtColor(
         heatmap_color,
         cv2.COLOR_BGR2RGB
     )
 
+    # --------------------------------------------------------
     # Overlay
+    # --------------------------------------------------------
+
     overlay = cv2.addWeighted(
         original,
         0.60,
