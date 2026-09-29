@@ -1,20 +1,88 @@
+import cv2
+import numpy as np
+from PIL import Image
 import streamlit as st
 import tensorflow as tf
-import numpy as np
-import cv2
-
-from PIL import Image
 from tensorflow.keras.preprocessing.image import img_to_array
-
 
 # ============================================================
 # STREAMLIT PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Deepfake Detector",
-    page_icon="🔍",
-    layout="wide"
+    page_title="AI Deepfake Artifact Detector",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Custom CSS for Dark Modern Tech Theme
+st.markdown(
+    """
+<style>
+    /* Main App Background and Font */
+    .stApp {
+        background-color: #0E1117;
+        color: #E0E6ED;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    /* Header Container Styling */
+    .header-container {
+        padding: 1.5rem 0rem 1rem 0rem;
+        border-bottom: 1px solid #1E2638;
+        margin-bottom: 2rem;
+    }
+    .header-title {
+        font-size: 2.2rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #4F46E5, #06B6D4);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.2rem;
+    }
+    .header-subtitle {
+        color: #94A3B8;
+        font-size: 1rem;
+    }
+
+    /* Result Cards */
+    .result-card-real {
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(6, 78, 59, 0.2) 100%);
+        border: 1px solid #10B981;
+        border-radius: 12px;
+        padding: 1.25rem;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .result-card-fake {
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(127, 29, 29, 0.2) 100%);
+        border: 1px solid #EF4444;
+        border-radius: 12px;
+        padding: 1.25rem;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .card-label {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-weight: 600;
+    }
+    .card-value {
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0.3rem 0;
+    }
+
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #161B22;
+        border-right: 1px solid #1E2638;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
 
@@ -22,704 +90,365 @@ st.set_page_config(
 # LOAD MODEL
 # ============================================================
 
+
 @st.cache_resource
 def load_model():
-
-    loaded_model = tf.keras.models.load_model(
-        "deepfake_xai_model.keras"
-    )
+    loaded_model = tf.keras.models.load_model("deepfake_xai_model.keras")
 
     # Build the model explicitly
-    dummy_input = tf.zeros(
-        (1, 299, 299, 3),
-        dtype=tf.float32
-    )
-
+    dummy_input = tf.zeros((1, 299, 299, 3), dtype=tf.float32)
     loaded_model(dummy_input)
 
     return loaded_model
 
-model = load_model()
 
-# Get the Xception base model
-# This assumes your model was created as:
-#
-# Sequential([
-#     base_model,
-#     GlobalAveragePooling2D(),
-#     ...
-# ])
-
-base_model = model.layers[0]
+try:
+    model = load_model()
+    base_model = model.layers[0]
+except Exception as e:
+    st.error(
+        f"Failed to load model file `deepfake_xai_model.keras`. Please verify the model file exists. Error: {e}"
+    )
 
 
 # ============================================================
-# TITLE
+# HELPER FUNCTIONS
 # ============================================================
 
-st.title("🔍 AI Deepfake Image Detection")
-
-st.subheader(
-    "Explainable AI using XceptionNet"
-)
-
-st.write(
-    "Upload a facial image to detect whether it is "
-    "potentially Real or Fake and identify the image "
-    "regions that influenced the model's prediction."
-)
-
-
-# ============================================================
-# FILE UPLOAD
-# ============================================================
-
-uploaded_file = st.file_uploader(
-    "Upload an image",
-    type=["jpg", "jpeg", "png"]
-)
-
-
-# ============================================================
-# PREPROCESS IMAGE
-# ============================================================
 
 def preprocess_image(image):
-
-    image = image.resize(
-        (299, 299)
-    )
-
+    image = image.resize((299, 299))
     image = img_to_array(image)
-
-    image = np.expand_dims(
-        image,
-        axis=0
-    )
-
-    image = tf.keras.applications.xception.preprocess_input(
-        image
-    )
-
+    image = np.expand_dims(image, axis=0)
+    image = tf.keras.applications.xception.preprocess_input(image)
     return image
 
 
-# ============================================================
-# PREDICTION
-# ============================================================
-
 def predict(image):
-
-    processed = preprocess_image(
-        image
-    )
-
-    prediction = model.predict(
-        processed,
-        verbose=0
-    )[0][0]
+    processed = preprocess_image(image)
+    prediction = model.predict(processed, verbose=0)[0][0]
 
     if prediction >= 0.5:
-
         label = "REAL"
-
         confidence = prediction * 100
-
     else:
-
         label = "FAKE"
-
         confidence = (1 - prediction) * 100
 
     return label, confidence, prediction
 
 
-# ============================================================
-# GRAD-CAM
-# ============================================================
-
 def make_gradcam_heatmap(
-    image_array,
-    prediction,
-    last_conv_layer_name="block14_sepconv2_act"
+    image_array, prediction, last_conv_layer_name="block14_sepconv2_act"
 ):
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Call the loaded Sequential model once.
-    # This builds its input/output tensors in Keras 3.
-    # --------------------------------------------------------
-
     _ = model(image_array, training=False)
-
-    # Get Xception base model
     base_model = model.layers[0]
-
-    # Get final convolutional layer
-    last_conv_layer = base_model.get_layer(
-        last_conv_layer_name
-    )
-
-    # --------------------------------------------------------
-    # Create Grad-CAM model
-    # --------------------------------------------------------
+    last_conv_layer = base_model.get_layer(last_conv_layer_name)
 
     grad_model = tf.keras.models.Model(
         inputs=base_model.input,
-        outputs=[
-            last_conv_layer.output,
-            base_model.output
-        ]
+        outputs=[last_conv_layer.output, base_model.output],
     )
-
-    # --------------------------------------------------------
-    # Forward pass
-    # --------------------------------------------------------
 
     with tf.GradientTape() as tape:
-
-        conv_outputs, base_output = grad_model(
-            image_array,
-            training=False
-        )
-
-        # Pass Xception output through the remaining
-        # layers of the Sequential model
+        conv_outputs, base_output = grad_model(image_array, training=False)
         x = base_output
-
         for layer in model.layers[1:]:
-
-            x = layer(
-                x,
-                training=False
-            )
+            x = layer(x, training=False)
 
         final_prediction = x[:, 0]
-
-        # ----------------------------------------------------
-        # For FAKE:
-        # fake probability = 1 - real probability
-        #
-        # For REAL:
-        # real probability = prediction
-        # ----------------------------------------------------
-
         if prediction < 0.5:
-
             class_output = 1.0 - final_prediction
-
         else:
-
             class_output = final_prediction
 
-    # --------------------------------------------------------
-    # Calculate gradients
-    # --------------------------------------------------------
-
-    grads = tape.gradient(
-        class_output,
-        conv_outputs
-    )
-
-    # --------------------------------------------------------
-    # Average gradients
-    # --------------------------------------------------------
-
-    pooled_grads = tf.reduce_mean(
-        grads,
-        axis=(0, 1, 2)
-    )
-
+    grads = tape.gradient(class_output, conv_outputs)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
     conv_outputs = conv_outputs[0]
 
-    # --------------------------------------------------------
-    # Weighted feature maps
-    # --------------------------------------------------------
-
-    heatmap = tf.reduce_sum(
-        conv_outputs * pooled_grads,
-        axis=-1
-    )
-
-    # ReLU
-    heatmap = tf.maximum(
-        heatmap,
-        0
-    )
-
-    # Normalize
-    heatmap = heatmap / (
-        tf.reduce_max(heatmap) + 1e-8
-    )
+    heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+    heatmap = tf.maximum(heatmap, 0)
+    heatmap = heatmap / (tf.reduce_max(heatmap) + 1e-8)
 
     return heatmap.numpy()
 
-# ============================================================
-# CREATE GRAD-CAM IMAGE
-# ============================================================
 
-def create_gradcam(
-    image,
-    prediction
-):
+def create_gradcam(image, prediction):
+    resized_image = image.resize((299, 299))
+    original = np.array(resized_image).astype(np.uint8)
 
-    # --------------------------------------------------------
-    # Resize image
-    # --------------------------------------------------------
-
-    resized_image = image.resize(
-        (299, 299)
-    )
-
-    original = np.array(
-        resized_image
-    ).astype(
-        np.uint8
-    )
-
-    # --------------------------------------------------------
-    # Convert image to array
-    # --------------------------------------------------------
-
-    image_array = img_to_array(
-        resized_image
-    )
-
-    image_array = np.expand_dims(
-        image_array,
-        axis=0
-    )
-
-    # Xception preprocessing
-    image_array = (
-        tf.keras.applications.xception
-        .preprocess_input(
-            image_array
-        )
-    )
-
-    # --------------------------------------------------------
-    # Generate Grad-CAM
-    # --------------------------------------------------------
+    image_array = img_to_array(resized_image)
+    image_array = np.expand_dims(image_array, axis=0)
+    image_array = tf.keras.applications.xception.preprocess_input(image_array)
 
     heatmap = make_gradcam_heatmap(
-        image_array,
-        prediction,
-        last_conv_layer_name="block14_sepconv2_act"
+        image_array, prediction, last_conv_layer_name="block14_sepconv2_act"
     )
+    heatmap = cv2.resize(heatmap, (299, 299))
 
-    # --------------------------------------------------------
-    # Resize heatmap
-    # --------------------------------------------------------
+    heatmap_uint8 = np.uint8(255 * heatmap)
+    heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+    heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
 
-    heatmap = cv2.resize(
-        heatmap,
-        (299, 299)
-    )
+    overlay = cv2.addWeighted(original, 0.60, heatmap_color, 0.40, 0)
 
-    # --------------------------------------------------------
-    # Convert to 0-255
-    # --------------------------------------------------------
-
-    heatmap_uint8 = np.uint8(
-        255 * heatmap
-    )
-
-    # --------------------------------------------------------
-    # Apply color map
-    # --------------------------------------------------------
-
-    heatmap_color = cv2.applyColorMap(
-        heatmap_uint8,
-        cv2.COLORMAP_JET
-    )
-
-    heatmap_color = cv2.cvtColor(
-        heatmap_color,
-        cv2.COLOR_BGR2RGB
-    )
-
-    # --------------------------------------------------------
-    # Overlay
-    # --------------------------------------------------------
-
-    overlay = cv2.addWeighted(
-        original,
-        0.60,
-        heatmap_color,
-        0.40,
-        0
-    )
-
-    return (
-        original,
-        heatmap,
-        heatmap_color,
-        overlay
-    )
+    return original, heatmap, heatmap_color, overlay
 
 
 # ============================================================
-# ANALYZE FACIAL REGIONS
+# NEW FUNCTION: PINPOINT DYNAMIC ARTIFACT HOTSPOTS
 # ============================================================
 
-def analyze_regions(heatmap):
 
+def locate_artificial_artifacts(heatmap, threshold_ratio=0.6, max_artifacts=4):
+    """
+    Scans heatmap activation intensities, thresholding high-activation regions
+    to locate specific x, y bounding points of artifacts in the image.
+    """
     h, w = heatmap.shape
 
-    # Define approximate facial regions
-    #
-    # These are approximate regions, not exact facial
-    # landmark locations.
-
-    regions = {
-
-        "Forehead / Upper Face": (
-            int(h * 0.00),
-            int(h * 0.25),
-            int(w * 0.20),
-            int(w * 0.80)
-        ),
-
-        "Eyes / Eyebrows": (
-            int(h * 0.20),
-            int(h * 0.43),
-            int(w * 0.10),
-            int(w * 0.90)
-        ),
-
-        "Nose / Center Face": (
-            int(h * 0.35),
-            int(h * 0.65),
-            int(w * 0.25),
-            int(w * 0.75)
-        ),
-
-        "Mouth / Lips": (
-            int(h * 0.55),
-            int(h * 0.78),
-            int(w * 0.15),
-            int(w * 0.85)
-        ),
-
-        "Chin / Lower Face": (
-            int(h * 0.75),
-            int(h * 0.98),
-            int(w * 0.20),
-            int(w * 0.80)
-        ),
-
-        "Left Face": (
-            int(h * 0.30),
-            int(h * 0.80),
-            int(w * 0.00),
-            int(w * 0.30)
-        ),
-
-        "Right Face": (
-            int(h * 0.30),
-            int(h * 0.80),
-            int(w * 0.70),
-            int(w * 1.00)
-        )
-    }
-
-    scores = {}
-
-    for region, (
-        y1,
-        y2,
-        x1,
-        x2
-    ) in regions.items():
-
-        region_heatmap = heatmap[
-            y1:y2,
-            x1:x2
-        ]
-
-        if region_heatmap.size > 0:
-
-            scores[region] = float(
-                np.mean(region_heatmap)
-            )
-
-        else:
-
-            scores[region] = 0.0
-
-    return scores
-
-
-# ============================================================
-# FIND IMPORTANT REGIONS
-# ============================================================
-
-def get_artifact_regions(scores):
-
-    # Sort by heatmap importance
-    sorted_regions = sorted(
-        scores.items(),
-        key=lambda x: x[1],
-        reverse=True
+    # Normalize heatmap between 0 and 255
+    norm_heatmap = cv2.normalize(
+        heatmap, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U
     )
 
-    # Calculate maximum score
-    max_score = sorted_regions[0][1]
+    # Threshold heatmap to isolate dominant peak activations
+    thresh_val = int(255 * threshold_ratio)
+    _, thresh_img = cv2.threshold(
+        norm_heatmap, thresh_val, 255, cv2.THRESH_BINARY
+    )
 
-    important_regions = []
+    # Find contours around intense activation regions
+    contours, _ = cv2.findContours(
+        thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
-    # Only include regions with meaningful activation
-    for region, score in sorted_regions:
+    artifacts = []
 
-        if max_score > 0:
+    # Sort contours by area size (largest focus regions first)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-            relative_score = (
-                score / max_score
-            )
+    for i, cnt in enumerate(contours[:max_artifacts]):
+        x, y, box_w, box_h = cv2.boundingRect(cnt)
+        center_x = x + (box_w // 2)
+        center_y = y + (box_h // 2)
 
-            if relative_score >= 0.65:
+        # Region intensity score
+        mask = np.zeros_like(norm_heatmap)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        mean_val = cv2.mean(norm_heatmap, mask=mask)[0] / 255.0
 
-                important_regions.append(
-                    region
-                )
+        # Map pixel positions to spatial descriptions
+        vert_pos = (
+            "Top" if center_y < h * 0.35 else ("Bottom" if center_y > h * 0.65 else "Middle")
+        )
+        horiz_pos = (
+            "Left" if center_x < w * 0.35 else ("Right" if center_x > w * 0.65 else "Center")
+        )
+        quadrant = f"{vert_pos}-{horiz_pos}"
 
-    # Maximum 3 regions
-    important_regions = important_regions[:3]
-
-    return important_regions, sorted_regions
-
-
-# ============================================================
-# MAIN APPLICATION
-# ============================================================
-
-if uploaded_file:
-
-    image = Image.open(
-        uploaded_file
-    ).convert("RGB")
-
-    col1, col2 = st.columns(2)
-
-    # --------------------------------------------------------
-    # IMAGE
-    # --------------------------------------------------------
-
-    with col1:
-
-        st.image(
-            image,
-            caption="Uploaded Image",
-            use_container_width=True
+        artifacts.append(
+            {
+                "id": i + 1,
+                "quadrant": quadrant,
+                "center_x": center_x,
+                "center_y": center_y,
+                "width": box_w,
+                "height": box_h,
+                "intensity": mean_val,
+            }
         )
 
-    # --------------------------------------------------------
-    # ANALYZE BUTTON
-    # --------------------------------------------------------
+    return artifacts
 
+
+# ============================================================
+# SIDEBAR NAVIGATION & UPLOAD
+# ============================================================
+
+with st.sidebar:
+    st.title("🛡️ Control Panel")
+    st.write("Upload an image and run analysis.")
+
+    uploaded_file = st.file_uploader(
+        "Choose a facial image...", type=["jpg", "jpeg", "png"]
+    )
+
+    st.markdown("---")
+    st.markdown("### ⚙️ System Status")
+    st.caption("Model Backbone: **XceptionNet**")
+    st.caption("XAI Method: **Grad-CAM Artifact Locator**")
+    st.caption("Input Specs: **299x299 RGB**")
+
+
+# ============================================================
+# MAIN INTERFACE
+# ============================================================
+
+st.markdown(
+    """
+    <div class="header-container">
+        <div class="header-title">AI Deepfake Detector & Artifact Locator</div>
+        <div class="header-subtitle">Analyze facial images for synthetic manipulations and pinpoint specific visual artifact locations using Grad-CAM.</div>
+    </div>
+""",
+    unsafe_allow_html=True,
+)
+
+if not uploaded_file:
+    st.info("👈 Please upload an image in the sidebar to begin analysis.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("#### 1. Upload")
+        st.caption("Supply a portrait or facial shot in JPG or PNG format.")
     with col2:
+        st.markdown("#### 2. Classify")
+        st.caption("The XceptionNet architecture evaluates structural artifacts.")
+    with col3:
+        st.markdown("#### 3. Pinpoint")
+        st.caption("Locate specific coordinates where anomalies or synthetic artifacts occur.")
 
-        if st.button(
-            "🔍 Analyze Image",
-            use_container_width=True
-        ):
+else:
+    image = Image.open(uploaded_file).convert("RGB")
 
-            # -----------------------------------------------
-            # PREDICTION
-            # -----------------------------------------------
+    # Main Grid Layout
+    left_col, right_col = st.columns([1, 1.2], gap="large")
 
-            label, confidence, prediction = predict(
-                image
-            )
+    with left_col:
+        st.subheader("📷 Input Preview")
+        st.image(image, caption="Uploaded Facial Image", use_container_width=True)
 
-            st.markdown(
-                "### 🧠 Model Prediction"
-            )
+        run_analysis = st.button(
+            "⚡ Run Artifact Detection",
+            use_container_width=True,
+            type="primary",
+        )
 
-            if label == "FAKE":
+    with right_col:
+        st.subheader("📊 Diagnostic Workspace")
 
-                st.error(
-                    f"⚠️ Prediction: {label}"
+        if run_analysis:
+            with st.spinner("Analyzing image features & locating visual artifacts..."):
+                label, confidence, prediction = predict(image)
+                original, heatmap, heatmap_color, overlay = create_gradcam(
+                    image, prediction
                 )
+                artifacts = locate_artificial_artifacts(heatmap)
 
+            # Store result in session state
+            st.session_state["analysis_done"] = True
+            st.session_state["data"] = {
+                "label": label,
+                "confidence": confidence,
+                "prediction": prediction,
+                "original": original,
+                "heatmap": heatmap,
+                "heatmap_color": heatmap_color,
+                "overlay": overlay,
+                "artifacts": artifacts,
+            }
+
+        if st.session_state.get("analysis_done", False):
+            data = st.session_state["data"]
+
+            # Display Classification Metric Card
+            if data["label"] == "REAL":
+                st.markdown(
+                    f"""
+                    <div class="result-card-real">
+                        <div class="card-label" style="color: #10B981;">Classification Result</div>
+                        <div class="card-value" style="color: #10B981;">✅ AUTHENTIC (REAL)</div>
+                        <span style="color: #A7F3D0;">Confidence Score: <b>{data['confidence']:.2f}%</b></span>
+                    </div>
+                """,
+                    unsafe_allow_html=True,
+                )
             else:
-
-                st.success(
-                    f"✅ Prediction: {label}"
+                st.markdown(
+                    f"""
+                    <div class="result-card-fake">
+                        <div class="card-label" style="color: #EF4444;">Classification Result</div>
+                        <div class="card-value" style="color: #EF4444;">⚠️ MANIPULATED (FAKE)</div>
+                        <span style="color: #FCA5A5;">Confidence Score: <b>{data['confidence']:.2f}%</b></span>
+                    </div>
+                """,
+                    unsafe_allow_html=True,
                 )
 
-            st.metric(
-                "Confidence",
-                f"{confidence:.2f}%"
+            # Interactive Tabs
+            tab_artifacts, tab_heatmaps, tab_summary = st.tabs(
+                [
+                    "🎯 Detected Artifact Points",
+                    "🔥 Grad-CAM Heatmap",
+                    "💡 Explanation",
+                ]
             )
 
+            with tab_artifacts:
+                st.markdown("##### 📍 Pinpointed Anomaly Hotspots")
 
-            # -----------------------------------------------
-            # GRAD-CAM
-            # -----------------------------------------------
+                if data["artifacts"]:
+                    if data["label"] == "FAKE":
+                        st.write(
+                            "The model identified the following **specific coordinate regions** as strong artificial/manipulation hotspots:"
+                        )
+                    else:
+                        st.write(
+                            "The model evaluated the following **key structural reference points** supporting authenticity:"
+                        )
 
-            st.markdown(
-                "### 🔥 Grad-CAM Explanation"
-            )
-
-            (
-                original,
-                heatmap,
-                heatmap_color,
-                overlay
-            ) = create_gradcam(
-                image,
-                prediction
-            )
-
-            grad_col1, grad_col2 = st.columns(2)
-
-            with grad_col1:
-
-                st.image(
-                    original,
-                    caption="Original Image",
-                    use_container_width=True
-                )
-
-            with grad_col2:
-
-                st.image(
-                    overlay,
-                    caption="Grad-CAM: Important Regions",
-                    use_container_width=True
-                )
-
-
-            # -----------------------------------------------
-            # REGION ANALYSIS
-            # -----------------------------------------------
-
-            st.markdown(
-                "### 📍 Potential Artifact / Influential Regions"
-            )
-
-            scores = analyze_regions(
-                heatmap
-            )
-
-            important_regions, sorted_regions = (
-                get_artifact_regions(scores)
-            )
-
-
-            if label == "FAKE":
-
-                if important_regions:
-
-                    region_text = ", ".join(
-                        important_regions
-                    )
-
-                    st.warning(
-                        f"⚠️ The model's strongest "
-                        f"activation is concentrated around: "
-                        f"**{region_text}**."
-                    )
-
-                    st.write(
-                        "These regions are potential areas "
-                        "where manipulation-related visual "
-                        "patterns may have influenced the "
-                        "model's Fake prediction."
-                    )
-
+                    # Bullet Points for Artifact Locations
+                    for item in data["artifacts"]:
+                        severity_badge = (
+                            "🔴 **High Severity**"
+                            if item["intensity"] > 0.8
+                            else "🟡 **Moderate Severity**"
+                        )
+                        
+                        st.markdown(
+                            f"""
+                            * **Artifact #{item['id']} — {item['quadrant']} Region**
+                              * **Location Coordinates:** `X: {item['center_x']}px, Y: {item['center_y']}px` *(Bounding Box: {item['width']}×{item['height']}px)*
+                              * **Activation Intensity:** `{item['intensity']*100:.1f}%` ({severity_badge})
+                              * **Diagnostic Observation:** High activation in this local cluster suggests boundary blending, abnormal texture gradients, or synthetic facial reconstruction artifacts.
+                            """
+                        )
                 else:
-
                     st.info(
-                        "No strongly concentrated facial "
-                        "region was identified by Grad-CAM."
+                        "No localized artifact clusters were detected above the sensitivity threshold."
                     )
 
-            else:
-
-                if important_regions:
-
-                    region_text = ", ".join(
-                        important_regions
+            with tab_heatmaps:
+                g_col1, g_col2 = st.columns(2)
+                with g_col1:
+                    st.image(
+                        data["original"],
+                        caption="Original Image",
+                        use_container_width=True,
+                    )
+                with g_col2:
+                    st.image(
+                        data["overlay"],
+                        caption="Grad-CAM Hotspot Activation",
+                        use_container_width=True,
                     )
 
-                    st.info(
-                        f"The model mainly focused on: "
-                        f"**{region_text}**."
-                    )
-
+            with tab_summary:
+                st.markdown("##### Technical Summary")
+                if data["label"] == "FAKE":
                     st.write(
-                        "These are regions that influenced "
-                        "the model's Real prediction."
+                        f"The model detected **{len(data['artifacts'])} distinct manipulation hotspot(s)** in the image. "
+                        "These areas represent clusters where pixel transitions deviate from typical camera sensor noise or natural biological features."
                     )
-
                 else:
-
-                    st.info(
-                        "No strongly concentrated region "
-                        "was identified."
+                    st.write(
+                        "The image displays coherent spatial structures across all evaluated focus points, with no localized synthetic anomalies detected."
                     )
 
-
-            # -----------------------------------------------
-            # REGION SCORES
-            # -----------------------------------------------
-
-            st.markdown(
-                "### 📊 Region Importance"
-            )
-
-            for region, score in sorted_regions:
-
-                st.write(
-                    f"**{region}**"
+                st.divider()
+                st.caption(
+                    "⚠️ **Disclaimer:** Pinpointed artifact locations indicate spatial areas of high activation in the neural network's final layer. They represent strong statistical evidence of synthetic features rather than visual proof."
                 )
-
-                st.progress(
-                    min(
-                        int(score * 100),
-                        100
-                    )
-                )
-
-
-            # -----------------------------------------------
-            # INTERPRETATION
-            # -----------------------------------------------
-
-            st.markdown(
-                "### 💡 Explanation"
-            )
-
-            if label == "FAKE":
-
-                st.write(
-                    "The XceptionNet model classified the "
-                    "image as potentially fake. The Grad-CAM "
-                    "heatmap shows the regions that contributed "
-                    "most strongly to this prediction."
-                )
-
-            else:
-
-                st.write(
-                    "The XceptionNet model classified the "
-                    "image as potentially real. The Grad-CAM "
-                    "heatmap shows the regions that contributed "
-                    "most strongly to this prediction."
-                )
-
-
-            # -----------------------------------------------
-            # IMPORTANT DISCLAIMER
-            # -----------------------------------------------
-
-            st.caption(
-                "⚠️ Note: The highlighted regions represent "
-                "areas that influenced the model's prediction. "
-                "They should not be interpreted as definitive "
-                "proof that an actual manipulation artifact "
-                "exists in that specific region."
-            )
+        else:
+            st.info("Click **'⚡ Run Artifact Detection'** to generate analysis.")
